@@ -1,1 +1,265 @@
 
+BOOL Try::fitCutLine(MSGraphicList* list, int type, MSMPointMap* checkCrossPointMap, MPoint moveOffset)
+{
+
+	MSGraphic* aGraphic;
+	MSGraphicID	gID;
+	MPoint		sP;
+	MPoint		eP;
+
+	// １本の場合
+	if (list->GetCount() == 1)
+	{
+		aGraphic = list->GetHead();
+		gID = aGraphic->getGraphicID();
+		((MSPath*)aGraphic)->getStartEnd(&sP, &eP);
+		if (type == MS_SPECIAL1)
+			checkCrossPointMap->SetAt(gID.serialNo, sP);
+		else
+			checkCrossPointMap->SetAt(gID.serialNo, eP);
+		return TRUE;
+	}
+
+	// 処理タイプにより場合分け
+	if (type == MS_SPECIAL1)
+	{
+		// １本目の始点座標を登録
+		aGraphic = list->GetHead();
+		gID = aGraphic->getGraphicID();
+		((MSPath*)aGraphic)->getStartEnd(&sP, &eP);
+		checkCrossPointMap->SetAt(gID.serialNo, sP);
+	}
+	else
+	{
+		// ｎ本目の終点座標を登録
+		aGraphic = list->GetTail();
+		gID = aGraphic->getGraphicID();
+		((MSPath*)aGraphic)->getStartEnd(&sP, &eP);
+		checkCrossPointMap->SetAt(gID.serialNo, eP);
+	}
+
+	MRect		canvasRect;
+
+	getCanvasRect(&canvasRect);//(NXApp->canvasManager())->getCanvasRect( &canvasRect );
+
+	MPoint		minP;
+	MPoint		maxP;
+
+	minP.x = canvasRect.origin.x + moveOffset.x;
+	minP.y = canvasRect.origin.y + moveOffset.y;
+	maxP.x = canvasRect.origin.x + moveOffset.x + canvasRect.size.width;
+	maxP.y = canvasRect.origin.y + moveOffset.y + canvasRect.size.height;
+
+	MSGraphic* obj1;
+	MSGraphic* obj2;
+	POSITION		nPos = NULL;
+	POSITION		ePos = NULL;
+	MPoint			sP1;
+	MPoint			sP2;
+	MPoint			eP1;
+	MPoint			eP2;
+	MPoint			midP;
+
+	MSGraphicList	deleteList;
+	MSGraphicList	fList;
+	MSGraphicList	resultList;
+	int				ret;
+
+	MPoint			checkP;
+	float			minDist = 99999.0f;
+	float			maxDist = -1.0f;
+	float			dist;
+
+	MSGraphicList	crossList;
+	MSGraphic* crossObj;
+	FMCrossPoint	mfCrossP;
+	FMCrossPoint	targetMfP;
+	POSITION		dPos = NULL;
+	unsigned int	serialNo;
+	BOOL			findFlag = FALSE;
+
+	MSGraphicList	fullInnerList;
+	MSGraphicList	normalList;
+	MSGraphicList	abnormalList;
+
+	for (nPos = list->GetHeadPosition(); nPos != NULL; )
+	{
+
+		if (nPos == list->GetHeadPosition())
+			obj1 = list->GetAt(nPos);
+		ePos = nPos;
+		list->GetNext(ePos);
+		if (ePos == NULL)
+			break;
+		obj2 = list->GetAt(ePos);
+
+		((MSPath*)obj1)->getStartEnd(&sP1, &eP1);
+		((MSPath*)obj2)->getStartEnd(&sP2, &eP2);
+		midP.x = (eP1.x + sP2.x) / 2.0f;
+		midP.y = (eP1.y + sP2.y) / 2.0f;
+
+		this -> GetPointDistance(&eP1, &sP2, &dist);
+		findFlag = FALSE;
+
+		// EPS より短い場合
+		if (dist >= DEF_SAME_DIST)
+		{
+
+			minDist = 99999.0f;
+
+			ret = this -> getCrossPoint(obj1, obj2, &crossList);
+
+			if ((ret == MS_NORMAL) && (crossList.GetCount()))
+			{
+
+				for (dPos = crossList.GetHeadPosition(); dPos != NULL;
+					crossList.GetNext(dPos))
+				{
+
+					crossObj = crossList.GetAt(dPos);
+					mfCrossP = ((MSCrossPoint*)crossObj)->getCrossPoint();
+
+					// 処理パーツを原点付近に移動するように変更したので
+					// minP の判定を外します
+					if ((mfCrossP.point.x < minP.x) ||
+						(mfCrossP.point.x > maxP.x) ||
+						(mfCrossP.point.y < minP.y) ||
+						(mfCrossP.point.y > maxP.y))
+						continue;
+
+					switch (mfCrossP.status)
+					{
+						case MF_FULLINNER:
+							fullInnerList.AddTail(crossObj);
+							break;
+						case FM_LEFTOUTER:
+							if (mfCrossP.side[0] == FM_ENDPOINT)
+								normalList.AddTail(crossObj);
+							else
+								abnormalList.AddTail(crossObj);
+							break;
+						case FM_RIGHTOUTER:
+							if (mfCrossP.side[1] == FM_STARTPOINT)
+								normalList.AddTail(crossObj);
+							else
+								abnormalList.AddTail(crossObj);
+							break;
+						case FM_FULLOUTER:
+							if ((mfCrossP.side[0] == FM_ENDPOINT) &&
+								(mfCrossP.side[1] == FM_STARTPOINT))
+								normalList.AddTail(crossObj);
+							else
+								abnormalList.AddTail(crossObj);
+							break;
+					}
+
+				}
+
+				if (fullInnerList.GetCount())
+				{
+
+					maxDist = -1.0f;
+					checkP = eP2;
+
+					// 次裁ち切り線の始点から一番離れている交点
+					// を探します
+					for (dPos = fullInnerList.GetHeadPosition(); dPos != NULL;
+						fullInnerList.GetNext(dPos))
+					{
+
+						crossObj = fullInnerList.GetAt(dPos);
+						mfCrossP = ((MSCrossPoint*)crossObj)->getCrossPoint();
+						this => GetPointDistance(&(mfCrossP.point), &checkP, &dist);
+						if (dist > maxDist)
+						{
+							maxDist = dist;
+							targetMfP = mfCrossP;
+							findFlag = TRUE;
+						}
+
+					}
+
+				}
+				else if (normalList.GetCount())
+				{
+
+					minDist = 99999.0f;
+					checkP = sP2;
+
+					for (dPos = normalList.GetHeadPosition(); dPos != NULL;
+						normalList.GetNext(dPos))
+					{
+
+						crossObj = normalList.GetAt(dPos);
+						mfCrossP = ((MSCrossPoint*)crossObj)->getCrossPoint();
+						this => GetPointDistance(&(mfCrossP.point), &checkP, &dist);
+						if (dist < minDist)
+						{
+							minDist = dist;
+							targetMfP = mfCrossP;
+							findFlag = TRUE;
+						}
+
+					}
+
+				}
+
+			}
+
+			if (fullInnerList.GetCount())
+				fullInnerList.RemoveAll();
+			if (normalList.GetCount())
+				normalList.RemoveAll();
+			if (abnormalList.GetCount())
+				abnormalList.RemoveAll();
+			if (crossList.GetCount())
+				crossList.FreeAll();
+
+		}
+
+		serialNo = obj1->getSerialNo();
+		if (type == MS_SPECIAL1)
+			serialNo++;
+
+		if (findFlag == TRUE)
+			checkCrossPointMap->SetAt(serialNo, targetMfP.point);
+		else
+			checkCrossPointMap->SetAt(serialNo, midP);
+
+		ret = this ->getFitPathAtDirect(obj1, HM_END, obj2, MS_START, &fList, FALSE);
+		if (ret == MS_ERROR)
+		{
+			if (deleteList.GetCount())
+				deleteList.FreeAll();
+			return FALSE;
+		}
+
+		if (nPos != list->GetHeadPosition())
+			deleteList.AddTail(obj1);
+
+		obj1 = fList.GetHead();
+		obj2 = fList.GetTail();
+
+		((MSPath*)obj1)->setEnd(midP);
+		((MSPath*)obj2)->setStart(midP);
+
+		fList.RemoveAll();
+		resultList.AddTail(obj1);
+		obj1 = obj2;
+
+		nPos = ePos;
+
+	}
+
+	resultList.AddTail(obj1);
+
+	if (deleteList.GetCount())
+		deleteList.FreeAll();
+
+	if (list->GetCount())
+		list->FreeAll();
+
+	list->AddTail(&resultList);
+
+	return TRUE;
+}
